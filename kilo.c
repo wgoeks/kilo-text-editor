@@ -43,6 +43,7 @@ typedef struct erow {
 
 struct editorConfig {
     int cx, cy;
+    int rowoff;
     int screenrows;
     int screencols;
     int numrows;
@@ -199,11 +200,14 @@ int getWindowSize(int *rows, int *cols) {
 /*** Row Operations ***/
 
 void editorAppendRow(char* s, size_t len) {
-    E.row.size = len;
-    E.row.chars = malloc(len + 1);
-    memcpy(E.row.chars, s, len);
-    E.row.chars[len] = '\0';
-    E.numrows = 1;
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
 }
 
 /*** File I/O ***/
@@ -216,7 +220,7 @@ void editorOpen(char* filename) {
     size_t linecap = 0;
     ssize_t linelen;
     linelen = getline(&line, &linecap, fp);
-    if (linelen != -1) {
+    while ((linelen = getline(&line, &linecap, fp)) != -1) {
         while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r') )
             linelen--;
         editorAppendRow(line, linelen);
@@ -264,7 +268,7 @@ void editorMoveCursor(int key){
             if (E.cy != 0) E.cy--;
             break;
         case ARROW_DOWN:
-            if (E.cy != E.screenrows - 1) E.cy++;
+            if (E.cy < E.numrows) E.cy++;
             break;
     }
 }
@@ -307,29 +311,43 @@ void editorProcessKeypress() {
 
 /*** Output ***/
 
+void editorScroll() {
+    if (E.cy < E.rowoff) {
+        E.rowoff = E.cy;
+    }
+    if (E.cy >= E.rowoff + E.screenrows) {
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+}
+
 void editorDrawRows(struct abuf *ab) {
     int y;
     for (y = 0; y < E.screenrows; y++) {
-        if (y >= E.numrows) {
-            if (E.numrows == 0 && y == E.screenrows / 3) {
-            char welcome[80];
-            int welcomelen = snprintf(welcome, sizeof(welcome), 
-                "Kilo editor -- version %s", KILO_VERSION);
-            if(welcomelen > E.screencols) welcomelen = E.screencols;
-            int padding = (E.screencols - welcomelen) / 2;
-            if (padding) {
-                abAppend(ab, "~", 1);
-                padding--;
+        int filerow = y + E.rowoff;
+        if (filerow >= E.numrows) {
+            if (y >= E.numrows) {
+                if (E.numrows == 0 && y == E.screenrows / 3) {
+                    char welcome[80];
+                    int welcomelen = snprintf(welcome, sizeof(welcome), 
+                        "Kilo editor -- version %s", KILO_VERSION);
+                    if(welcomelen > E.screencols) welcomelen = E.screencols;
+                    int padding = (E.screencols - welcomelen) / 2;
+                    if (padding) {
+                        abAppend(ab, "~", 1);
+                        padding--;
+                    }
+                    while (padding--) abAppend(ab, " ", 1);
+                    abAppend(ab, welcome, welcomelen);
+
+                } else {
+                    abAppend(ab, "~", 1);
+                }
             }
-            while (padding--) abAppend(ab, " ", 1);
-            abAppend(ab, welcome, welcomelen);
+        
         } else {
-            abAppend(ab, "~", 1);
-        }
-        } else {
-            int len = E.row.size;
+            int len = E.row[filerow].size;
             if (len > E.screencols) len = E.screencols;
-            abAppend(ab, E.row.chars, len);
+            abAppend(ab, E.row[filerow].chars, len);
         }
         
         
@@ -341,6 +359,7 @@ void editorDrawRows(struct abuf *ab) {
 }
 
 void editorRefreshScreen() {
+    editorScroll();
     // \x1b is 27 in decimal and the escape character
     
     struct abuf ab = ABUF_INIT;
@@ -351,7 +370,7 @@ void editorRefreshScreen() {
     editorDrawRows(&ab);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
     abAppend(&ab, buf, strlen(buf));
 
     abAppend(&ab, "\x1b[?25h", 6); // Show cursor
@@ -365,6 +384,7 @@ void editorRefreshScreen() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
     E.numrows = 0;
     E.row = NULL;
 
